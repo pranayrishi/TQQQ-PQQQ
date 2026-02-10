@@ -1,0 +1,45 @@
+name: Daily Trading Execution
+
+on:
+  schedule:
+    # Run at 3:50 PM ET (20:50 UTC) on weekdays
+    - cron: '50 20 * * 1-5'
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  trade:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+      
+      - name: Create credentials file
+        run: |
+          cat << EOF > config/credentials.yaml
+          polygon_api_key: "${{ secrets.POLYGON_API_KEY }}"
+          alpaca_api_key: "${{ secrets.ALPACA_API_KEY }}"
+          alpaca_api_secret: "${{ secrets.ALPACA_API_SECRET }}"
+          twilio_account_sid: ""
+          twilio_auth_token: ""
+          twilio_from_number: ""
+          twilio_to_number: ""
+          email_username: "${{ secrets.EMAIL_USERNAME }}"
+          email_password: "${{ secrets.EMAIL_PASSWORD }}"
+          EOF
+      
+      - name: Run trading execution
+        run: |
+          python -m src.main --run-once
+        env:
+          TZ: America/New_York

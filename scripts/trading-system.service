@@ -1,0 +1,19 @@
+[Unit]
+Description=Automated Trading System
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/trading-system
+ExecStart=/home/ubuntu/trading-system/venv/bin/python -m src.main
+Restart=always
+RestartSec=10
+Environment=PYTHONUNBUFFERED=1
+
+# Logging
+StandardOutput=append:/home/ubuntu/trading-system/logs/trading.log
+StandardError=append:/home/ubuntu/trading-system/logs/trading.log
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,78 @@
+# System Settings
+system:
+  name: "Automated Trading System"
+  version: "1.0.0"
+  timezone: "US/Eastern"
+  log_level: "INFO"
+
+# Data Configuration
+data:
+  cache_dir: "data/cache"
+  polygon_api_key: "${POLYGON_API_KEY}"
+
+# Strategy Configuration
+strategies:
+  weights:
+    MA_Breakout_Long: 0.25
+    MA_Breakout_Short: 0.15
+    Momentum_Long: 0.20
+    Momentum_Short: 0.10
+    MeanReversion_Long: 0.10
+    MeanReversion_Short: 0.10
+    VelocityFilter: 0.10
+  
+  ma_breakout:
+    short_ma_period: 50
+    long_ma_period: 250
+    confirmation_days: 1
+  
+  momentum:
+    lookback_period: 126
+    threshold: 0.0
+  
+  mean_reversion:
+    roc_period: 5
+    oversold_threshold: -0.05
+    overbought_threshold: 0.05
+  
+  velocity:
+    fast_period: 10
+    slow_period: 50
+
+# Execution Configuration
+execution:
+  allow_fractional_shares: true
+  min_trade_value: 10.0
+  commission_per_trade: 0.0
+  execution_window_start: "15:50"
+  execution_window_end: "16:00"
+
+# Broker Configuration
+brokers:
+  alpaca:
+    paper: false  # LIVE TRADING ENABLED
+
+# Alert Configuration
+alerts:
+  sms:
+    enabled: false
+    from_number: "+1234567890"
+    to_number: "+1234567890"
+  email:
+    enabled: true
+    server: "smtp.gmail.com"
+    port: 587
+    from_address: "pranayrishi.nalem@gmail.com"
+    to_address: "pranayrishi.nalem@gmail.com,rnalem3@gmail.com"
+
+# Risk Management
+risk:
+  max_position_pct: 1.0
+  max_daily_loss_pct: 0.10
+  max_order_value: 1000000
+
+# Backtest Configuration
+backtest:
+  initial_capital: 100000
+  start_date: "1985-01-01"
+  end_date: null
