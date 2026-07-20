@@ -5,6 +5,8 @@ pyyaml>=6.0
 
 # Data
 requests>=2.28.0
+yfinance>=1.0.0,<2.0.0
+scipy>=1.11.0
 
 # Brokers
 alpaca-py>=0.13.0

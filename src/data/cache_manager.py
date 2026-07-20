@@ -50,8 +50,13 @@ class CacheManager:
         path = self._get_path(ticker)
         
         if not os.path.exists(path):
-            logger.debug(f"No cache file for {ticker}")
-            return None
+            backup_path = path + ".bak"
+            if os.path.exists(backup_path):
+                path = backup_path
+                logger.info(f"Using backup cache for {ticker}")
+            else:
+                logger.debug(f"No cache file for {ticker}")
+                return None
         
         try:
             df = pd.read_csv(path)

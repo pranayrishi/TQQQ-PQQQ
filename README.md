@@ -36,7 +36,6 @@ source venv/bin/activate
 Edit `config/credentials.yaml`:
 
 ```yaml
-polygon_api_key: "your_polygon_api_key"
 alpaca_api_key: "your_alpaca_api_key"
 alpaca_api_secret: "your_alpaca_secret"
 ```
@@ -47,11 +46,21 @@ alpaca_api_secret: "your_alpaca_secret"
 python scripts/run_backtest.py --initial-capital 100000
 ```
 
-### 4. Start Live Trading (Paper Mode)
+### 4. Start Scheduled Trading
 
 ```bash
 python -m src.main
 ```
+
+To verify the full workflow against the configured account without submitting
+orders, run:
+
+```bash
+python -m src.main --run-once --dry-run --force
+```
+
+The included GitHub Actions workflow also enforces `--dry-run`; it exercises
+the remote data, strategy, and account paths without submitting orders.
 
 ## Project Structure
 
@@ -111,13 +120,14 @@ brokers:
 
 ## API Requirements
 
-### Polygon.io
-- Used for historical market data
-- Free tier works but has rate limits
-- Get API key at: https://polygon.io
+### yfinance
+- Used for adjusted historical data for NDX, TQQQ, and SQQQ
+- No separate market-data API key is required
+- Intended for personal-use access to Yahoo Finance data
 
 ### Alpaca
-- Used for paper and live trading
+- Used for paper/live trading and current IEX market snapshots
+- Supplies the latest quote, trade, minute bar, daily bar, and prior daily bar
 - Free paper trading account
 - Sign up at: https://alpaca.markets
 
@@ -141,7 +151,6 @@ docker build -t trading-system .
 
 # Run container
 docker run -d \
-  -e POLYGON_API_KEY=your_key \
   -e ALPACA_API_KEY=your_key \
   -e ALPACA_API_SECRET=your_secret \
   -v $(pwd)/data:/app/data \

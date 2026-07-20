@@ -12,8 +12,10 @@ import pytz
 
 from .position_calculator import PositionCalculator
 from .order_manager import OrderManager
+from ..brokers.alpaca_broker import AlpacaBroker
 from ..data.data_manager import DataManager
 from ..strategies.strategy_aggregator import StrategyAggregator
+from ..utils.market_calendar import MarketCalendar
 
 logger = logging.getLogger(__name__)
 
@@ -45,11 +47,22 @@ class ExecutionEngine:
         self.aggregator = StrategyAggregator(config.get("strategies", {}))
         self.position_calculator = PositionCalculator(config.get("execution", {}))
         self.order_manager = OrderManager(config.get("brokers", {}))
+        self.market_calendar = MarketCalendar()
+
+        alpaca_config = config.get("brokers", {}).get("alpaca", {})
+        if alpaca_config.get("api_key") and alpaca_config.get("api_secret"):
+            self.order_manager.register_broker(
+                "alpaca",
+                AlpacaBroker(alpaca_config),
+            )
+        else:
+            logger.warning("Alpaca credentials are not configured")
         
         # State
         self._initialized = False
         self._last_execution: Optional[Dict] = None
         self._paper_mode = config.get("brokers", {}).get("alpaca", {}).get("paper", True)
+        self._dry_run = config.get("execution", {}).get("dry_run", False)
     
     def initialize(self) -> None:
         """Initialize all components."""
@@ -69,6 +82,12 @@ class ExecutionEngine:
         for broker, success in connection_results.items():
             if not success:
                 logger.warning(f"Failed to connect to {broker}")
+
+        if not self._dry_run:
+            if not connection_results:
+                raise RuntimeError("No broker is configured for live execution")
+            if not all(connection_results.values()):
+                raise RuntimeError("A configured broker failed to connect")
         
         self._initialized = True
         logger.info("Execution engine initialized")
@@ -93,6 +112,7 @@ class ExecutionEngine:
             "execution_id": execution_id,
             "timestamp": datetime.now(self.timezone).isoformat(),
             "paper_mode": self._paper_mode,
+            "dry_run": self._dry_run,
             "status": "pending"
         }
         
@@ -103,10 +123,28 @@ class ExecutionEngine:
                 result["reason"] = "Outside execution window"
                 logger.info("Outside execution window, skipping")
                 return result
+
+            try:
+                result["market_clock"] = self.order_manager.get_market_clock()
+                if (
+                    not self._dry_run
+                    and not result["market_clock"].get("is_open", False)
+                ):
+                    result["status"] = "skipped"
+                    result["reason"] = "Alpaca reports that the market is closed"
+                    logger.warning("Alpaca market clock is closed; skipping")
+                    return result
+            except Exception:
+                if not self._dry_run:
+                    raise
+                logger.warning("Could not retrieve Alpaca market clock in dry run")
             
             # Refresh data
             logger.info("Refreshing market data...")
             self.data_manager.refresh_intraday()
+
+            if not self._dry_run:
+                self._assert_data_is_fresh()
             
             # Generate signals
             logger.info("Generating trading signals...")
@@ -129,6 +167,41 @@ class ExecutionEngine:
                 "TQQQ": tqqq_bar["close"],
                 "SQQQ": sqqq_bar["close"]
             }
+
+            # Use Alpaca's consolidated snapshots for live order sizing.
+            result["market_data"] = {}
+            try:
+                snapshots = self.order_manager.get_market_snapshots(
+                    ["TQQQ", "SQQQ"]
+                )
+                for symbol in ("TQQQ", "SQQQ"):
+                    snapshot = snapshots.get(symbol, {})
+                    quote = snapshot.get("latest_quote", {})
+                    trade = snapshot.get("latest_trade", {})
+                    minute_bar = snapshot.get("minute_bar", {})
+                    daily_bar = snapshot.get("daily_bar", {})
+
+                    bid = quote.get("bid", 0)
+                    ask = quote.get("ask", 0)
+                    candidates = [
+                        ("quote_midpoint", (bid + ask) / 2 if bid and ask else 0),
+                        ("latest_trade", trade.get("price", 0)),
+                        ("minute_bar", minute_bar.get("close", 0)),
+                        ("daily_bar", daily_bar.get("close", 0)),
+                    ]
+                    for source, price in candidates:
+                        if price and price > 0:
+                            current_prices[symbol] = price
+                            result["market_data"][symbol] = {
+                                "price_source": source,
+                                "snapshot": snapshot,
+                            }
+                            break
+            except Exception as exc:
+                logger.warning(
+                    "Could not get Alpaca snapshots; using yfinance closes: %s",
+                    exc,
+                )
             
             result["prices"] = current_prices
             
@@ -214,6 +287,21 @@ class ExecutionEngine:
             for symbol, trade in trades.items():
                 if trade["action"] in ["BUY", "SELL"]:
                     shares = trade["shares_to_trade"]
+
+                    if self._dry_run:
+                        result["executed_orders"].append({
+                            "symbol": symbol,
+                            "side": trade["action"],
+                            "qty": abs(shares),
+                            "status": "dry_run",
+                        })
+                        logger.info(
+                            "Dry run: would place %s order for %.2f %s",
+                            trade["action"],
+                            abs(shares),
+                            symbol,
+                        )
+                        continue
                     
                     try:
                         order_result = self.order_manager.place_order(
@@ -259,12 +347,33 @@ class ExecutionEngine:
         end_minutes = end_hour * 60 + end_min
         
         return start_minutes <= current_minutes <= end_minutes
+
+    def _assert_data_is_fresh(self) -> None:
+        """Stop live execution unless all datasets include the prior session."""
+        today = datetime.now(self.timezone).date()
+        expected_date = self.market_calendar.get_previous_trading_day(today)
+        stale = []
+
+        for ticker in ("NDX", "TQQQ", "SQQQ"):
+            latest_date = datetime.strptime(
+                self.data_manager.get_latest_bar(ticker)["date"],
+                "%Y-%m-%d",
+            ).date()
+            if latest_date < expected_date:
+                stale.append(f"{ticker} latest={latest_date}")
+
+        if stale:
+            raise RuntimeError(
+                "Live execution blocked because market data is stale; expected at "
+                f"least {expected_date}: {', '.join(stale)}"
+            )
     
     def get_status(self) -> Dict:
         """Get current engine status."""
         return {
             "initialized": self._initialized,
             "paper_mode": self._paper_mode,
+            "dry_run": self._dry_run,
             "last_execution": self._last_execution,
             "data_loaded": self.data_manager.is_initialized if self._initialized else False,
             "connected_brokers": list(self.order_manager.brokers.keys()) if self._initialized else []

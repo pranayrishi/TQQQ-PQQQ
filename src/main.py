@@ -49,10 +49,6 @@ def load_config(config_path: str) -> Dict:
         
         # Merge credentials into config
         if credentials:
-            # Data section
-            if "polygon_api_key" in credentials:
-                config.setdefault("data", {})["polygon_api_key"] = credentials["polygon_api_key"]
-            
             # Broker section
             if "alpaca_api_key" in credentials:
                 config.setdefault("brokers", {}).setdefault("alpaca", {})["api_key"] = credentials["alpaca_api_key"]
@@ -71,7 +67,6 @@ def load_config(config_path: str) -> Dict:
     
     # Override with environment variables
     env_mappings = {
-        "POLYGON_API_KEY": ("data", "polygon_api_key"),
         "ALPACA_API_KEY": ("brokers", "alpaca", "api_key"),
         "ALPACA_API_SECRET": ("brokers", "alpaca", "api_secret"),
         "TWILIO_ACCOUNT_SID": ("alerts", "sms", "account_sid"),
@@ -119,6 +114,11 @@ def main():
         action="store_true",
         help="Run without executing trades"
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Allow --run-once execution outside the configured trading window"
+    )
     
     args = parser.parse_args()
     
@@ -150,7 +150,7 @@ def main():
         if args.run_once:
             # Single execution mode
             logger.info("Running single execution...")
-            results = scheduler.run_now(force=True)
+            results = scheduler.run_now(force=args.force)
             logger.info(f"Execution completed: {results['status']}")
             
             if results.get("error"):
