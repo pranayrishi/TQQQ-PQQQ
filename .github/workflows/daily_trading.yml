@@ -2,16 +2,28 @@ name: Daily Trading Execution
 
 on:
   schedule:
-    # 3:50 PM ET in daylight time and standard time. The application
-    # rejects the extra run because it falls outside the execution window.
-    - cron: '50 19 * * 1-5'
-    - cron: '50 20 * * 1-5'
-  workflow_dispatch:  # Allow manual trigger
+    - cron: '50 15 * * 1-5'
+      timezone: "America/New_York"
+
+  workflow_dispatch:
+    inputs:
+      live:
+        description: "Submit real Alpaca orders"
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tqqq-daily-trading
+  cancel-in-progress: false
 
 jobs:
   trade:
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -23,36 +35,29 @@ jobs:
           key: market-data-${{ runner.os }}-${{ github.run_id }}
           restore-keys: |
             market-data-${{ runner.os }}-
-      
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: 'pip'
-      
+
       - name: Install dependencies
-        run: |
-          pip install -r requirements.txt
-      
-      - name: Create credentials file
-        run: |
-          cat << EOF > config/credentials.yaml
-          alpaca_api_key: "${{ secrets.ALPACA_API_KEY }}"
-          alpaca_api_secret: "${{ secrets.ALPACA_API_SECRET }}"
-          twilio_account_sid: ""
-          twilio_auth_token: ""
-          twilio_from_number: ""
-          twilio_to_number: ""
-          email_username: "${{ secrets.EMAIL_USERNAME }}"
-          email_password: "${{ secrets.EMAIL_PASSWORD }}"
-          EOF
-      
-      - name: Run protected trading execution
-        run: |
-          args=(--run-once --dry-run)
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            args+=(--force)
-          fi
-          python -m src.main "${args[@]}"
+        run: pip install -r requirements.txt
+
+      - name: Run trading execution
+        shell: bash
         env:
           TZ: America/New_York
+          ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+          ALPACA_API_SECRET: ${{ secrets.ALPACA_API_SECRET }}
+        run: |
+          args=(--run-once)
+
+          # Manual runs default to dry-run. Scheduled runs are live.
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" &&
+                "${{ inputs.live }}" != "true" ]]; then
+            args+=(--dry-run --force)
+          fi
+
+          python -m src.main "${args[@]}"
