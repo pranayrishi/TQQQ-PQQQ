@@ -2,8 +2,10 @@ name: Daily Trading Execution
 
 on:
   schedule:
-    # Run at 3:00 PM ET (20:00 UTC) on weekdays - earlier to account for GitHub delays
-    - cron: '0 20 * * 1-5'
+    # 3:50 PM ET in daylight time and standard time. The application
+    # rejects the extra run because it falls outside the execution window.
+    - cron: '50 19 * * 1-5'
+    - cron: '50 20 * * 1-5'
   workflow_dispatch:  # Allow manual trigger
 
 jobs:
@@ -13,6 +15,14 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Restore market-data cache
+        uses: actions/cache@v4
+        with:
+          path: data/cache/*.csv
+          key: market-data-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: |
+            market-data-${{ runner.os }}-
       
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -27,7 +37,6 @@ jobs:
       - name: Create credentials file
         run: |
           cat << EOF > config/credentials.yaml
-          polygon_api_key: "${{ secrets.POLYGON_API_KEY }}"
           alpaca_api_key: "${{ secrets.ALPACA_API_KEY }}"
           alpaca_api_secret: "${{ secrets.ALPACA_API_SECRET }}"
           twilio_account_sid: ""
@@ -38,8 +47,12 @@ jobs:
           email_password: "${{ secrets.EMAIL_PASSWORD }}"
           EOF
       
-      - name: Run trading execution
+      - name: Run protected trading execution
         run: |
-          python -m src.main --run-once
+          args=(--run-once --dry-run)
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            args+=(--force)
+          fi
+          python -m src.main "${args[@]}"
         env:
           TZ: America/New_York

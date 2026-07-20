@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 from typing import Optional, Dict
 import pandas as pd
 
-from .polygon_client import PolygonClient, PolygonAPIError
+from .yfinance_client import YahooFinanceClient, YahooFinanceError
 from .cache_manager import CacheManager
 
 logger = logging.getLogger(__name__)
@@ -26,7 +26,7 @@ class DataManager:
     Central data management for the trading system.
     
     Responsibilities:
-    - Fetch historical data from Polygon.io
+    - Fetch adjusted historical data through yfinance
     - Maintain local CSV cache
     - Provide fallback when API is unavailable
     - Validate data integrity
@@ -46,18 +46,12 @@ class DataManager:
         Initialize DataManager.
         
         Args:
-            config: Configuration dictionary containing API keys and paths
+            config: Configuration dictionary containing data paths
         """
         self.config = config
         self.cache_dir = config.get("cache_dir", "data/cache")
         
-        # Initialize Polygon client
-        api_key = config.get("polygon_api_key")
-        if api_key and api_key != "${POLYGON_API_KEY}":
-            self.polygon = PolygonClient(api_key)
-        else:
-            logger.warning("No Polygon API key provided - using cached data only")
-            self.polygon = None
+        self.market_data = YahooFinanceClient()
         
         # Initialize cache manager
         self.cache = CacheManager(self.cache_dir)
@@ -95,12 +89,16 @@ class DataManager:
             # Check if we need to update
             today = datetime.now().strftime("%Y-%m-%d")
             
-            if last_date < today and self.polygon:
+            if last_date < today:
                 # Fetch new data
                 start_date = (datetime.strptime(last_date, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
                 
                 try:
-                    new_data = self.polygon.get_daily_bars(ticker, start_date, today)
+                    new_data = self.market_data.get_daily_bars(
+                        ticker,
+                        start_date,
+                        today,
+                    )
                     
                     if not new_data.empty:
                         # Combine and deduplicate
@@ -114,12 +112,12 @@ class DataManager:
                         logger.info(f"Updated {ticker} with {len(new_data)} new rows")
                         return
                         
-                except PolygonAPIError as e:
+                except YahooFinanceError as e:
                     logger.warning(f"Could not update {ticker}: {e}")
             
             self._data[ticker] = cached_data
             
-        elif self.polygon:
+        else:
             # No cache - fetch full history
             logger.info(f"No cache for {ticker}, fetching full history...")
             
@@ -127,7 +125,7 @@ class DataManager:
             end_date = datetime.now().strftime("%Y-%m-%d")
             
             try:
-                data = self.polygon.get_daily_bars(ticker, start_date, end_date)
+                data = self.market_data.get_daily_bars(ticker, start_date, end_date)
                 
                 if not data.empty:
                     self.cache.save(ticker, data)
@@ -136,10 +134,8 @@ class DataManager:
                 else:
                     raise DataError(f"No data available for {ticker}")
                     
-            except PolygonAPIError as e:
+            except YahooFinanceError as e:
                 raise DataError(f"Failed to fetch data for {ticker}: {e}")
-        else:
-            raise DataError(f"No data available for {ticker} and no API configured")
     
     def get_data(self, ticker: str, start_date: Optional[str] = None, end_date: Optional[str] = None) -> pd.DataFrame:
         """
@@ -196,27 +192,31 @@ class DataManager:
         
         Called during the execution window to get current prices.
         """
-        if not self.polygon:
-            logger.warning("Cannot refresh intraday - no API configured")
-            return
-        
         today = datetime.now().strftime("%Y-%m-%d")
         
         for ticker in self.REQUIRED_TICKERS:
             try:
-                # Get today's data
-                new_data = self.polygon.get_daily_bars(ticker, today, today)
+                last_date = self._data[ticker]["date"].iloc[-1]
+                start_date = (
+                    datetime.strptime(last_date, "%Y-%m-%d") + timedelta(days=1)
+                ).strftime("%Y-%m-%d")
+                new_data = self.market_data.get_daily_bars(
+                    ticker,
+                    start_date,
+                    today,
+                )
                 
                 if not new_data.empty:
-                    # Update the last row if it's today, otherwise append
-                    if self._data[ticker]["date"].iloc[-1] == today:
-                        self._data[ticker].iloc[-1] = new_data.iloc[0]
-                    else:
-                        self._data[ticker] = pd.concat([self._data[ticker], new_data], ignore_index=True)
+                    combined = pd.concat(
+                        [self._data[ticker], new_data], ignore_index=True
+                    )
+                    combined = combined.drop_duplicates(subset=["date"], keep="last")
+                    combined = combined.sort_values("date").reset_index(drop=True)
+                    self._data[ticker] = combined
+                    self.cache.save(ticker, combined)
+                    logger.info(f"Refreshed latest available data for {ticker}")
                     
-                    logger.info(f"Refreshed intraday data for {ticker}")
-                    
-            except PolygonAPIError as e:
+            except YahooFinanceError as e:
                 logger.warning(f"Could not refresh {ticker}: {e}")
     
     def validate_data(self, ticker: str) -> bool:

@@ -10,7 +10,7 @@ import tempfile
 from datetime import datetime
 
 from src.data.cache_manager import CacheManager
-from src.data.polygon_client import PolygonClient, PolygonAPIError
+from src.data.yfinance_client import YahooFinanceClient
 
 
 class TestCacheManager:
@@ -57,6 +57,20 @@ class TestCacheManager:
         """Test loading non-existent ticker."""
         loaded = cache_manager.load("NONEXISTENT")
         assert loaded is None
+
+    def test_loads_backup_when_primary_is_missing(
+        self,
+        cache_manager,
+        sample_data,
+    ):
+        """Tracked backup caches can bootstrap a fresh runner."""
+        backup_path = cache_manager._get_path("TEST") + ".bak"
+        sample_data.to_csv(backup_path, index=False)
+
+        loaded = cache_manager.load("TEST")
+
+        assert loaded is not None
+        assert len(loaded) == len(sample_data)
     
     def test_get_last_date(self, cache_manager, sample_data):
         """Test getting last date from cache."""
@@ -84,25 +98,47 @@ class TestCacheManager:
         
         loaded = cache_manager.load(ticker)
         
-        assert loaded["date"].dtype == object  # String
+        assert pd.api.types.is_string_dtype(loaded["date"].dtype)
         assert loaded["close"].dtype == float
         assert loaded["volume"].dtype == int
 
 
-class TestPolygonClient:
-    """Tests for PolygonClient (mock tests)."""
-    
-    def test_initialization_without_key(self):
-        """Test that initialization without API key raises error."""
-        with pytest.raises(ValueError):
-            PolygonClient("")
-    
-    def test_initialization_with_key(self):
-        """Test initialization with API key."""
-        client = PolygonClient("test_api_key")
-        assert client.api_key == "test_api_key"
-    
-    def test_rate_limit_delay(self):
-        """Test rate limit delay is set."""
-        client = PolygonClient("test_api_key")
-        assert client.RATE_LIMIT_DELAY > 0
+class TestYahooFinanceClient:
+    """Tests for yfinance data normalization."""
+
+    def test_symbol_mapping(self):
+        assert YahooFinanceClient.SYMBOLS["NDX"] == "^NDX"
+        assert YahooFinanceClient.SYMBOLS["TQQQ"] == "TQQQ"
+
+    def test_normalize_daily_bars(self):
+        raw = pd.DataFrame(
+            {
+                "Open": [100.0, 101.0],
+                "High": [102.0, 103.0],
+                "Low": [99.0, 100.0],
+                "Close": [101.0, 102.0],
+                "Volume": [1000, 1200],
+            },
+            index=pd.to_datetime(["2026-07-16", "2026-07-17"]),
+        )
+
+        result = YahooFinanceClient._normalize(
+            raw,
+            "TQQQ",
+            "2026-07-16",
+            "2026-07-17",
+        )
+
+        assert list(result.columns) == [
+            "date", "open", "high", "low", "close", "volume"
+        ]
+        assert result["date"].tolist() == ["2026-07-16", "2026-07-17"]
+        assert result["close"].tolist() == [101.0, 102.0]
+
+    def test_rejects_unknown_ticker(self):
+        with pytest.raises(ValueError, match="Unsupported"):
+            YahooFinanceClient().get_daily_bars(
+                "UNKNOWN",
+                "2026-07-16",
+                "2026-07-17",
+            )

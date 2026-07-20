@@ -8,7 +8,7 @@ system:
 # Data Configuration
 data:
   cache_dir: "data/cache"
-  polygon_api_key: "${POLYGON_API_KEY}"
+  provider: "yfinance"
 
 # Strategy Configuration
 strategies:
@@ -51,6 +51,7 @@ execution:
 brokers:
   alpaca:
     paper: false  # LIVE TRADING ENABLED
+    data_feed: "iex"
 
 # Alert Configuration
 alerts:

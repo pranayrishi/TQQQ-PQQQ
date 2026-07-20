@@ -35,19 +35,30 @@ class AlpacaBroker(BaseBroker):
         self.api_key = config.get("api_key")
         self.api_secret = config.get("api_secret")
         self.paper = config.get("paper", True)
+        self.data_feed_name = config.get("data_feed", "iex").lower()
         
         self.client = None
+        self.data_client = None
+        self.data_feed = None
         self._account_id = None
     
     def connect(self) -> bool:
         """Connect to Alpaca API."""
         try:
+            from alpaca.data.enums import DataFeed
+            from alpaca.data.historical import StockHistoricalDataClient
             from alpaca.trading.client import TradingClient
+
+            self.data_feed = DataFeed(self.data_feed_name)
             
             self.client = TradingClient(
                 api_key=self.api_key,
                 secret_key=self.api_secret,
                 paper=self.paper
+            )
+            self.data_client = StockHistoricalDataClient(
+                api_key=self.api_key,
+                secret_key=self.api_secret,
             )
             
             # Verify connection by getting account
@@ -56,7 +67,7 @@ class AlpacaBroker(BaseBroker):
             
             self._connected = True
             logger.info(f"Connected to Alpaca ({'paper' if self.paper else 'live'})")
-            logger.info(f"Account: {self._account_id}")
+            logger.info("Authenticated Alpaca account")
             
             return True
             
@@ -70,6 +81,7 @@ class AlpacaBroker(BaseBroker):
     def disconnect(self) -> None:
         """Disconnect from Alpaca API."""
         self.client = None
+        self.data_client = None
         self._connected = False
         logger.info("Disconnected from Alpaca")
     
@@ -221,39 +233,95 @@ class AlpacaBroker(BaseBroker):
             return False
     
     def get_quote(self, symbol: str) -> Dict:
-        """Get current quote for a symbol."""
+        """Get the current quote plus trade/bar fallbacks for a symbol."""
+        snapshot = self.get_market_snapshots([symbol]).get(symbol, {})
+        quote = snapshot.get("latest_quote", {})
+        trade = snapshot.get("latest_trade", {})
+        minute_bar = snapshot.get("minute_bar", {})
+        daily_bar = snapshot.get("daily_bar", {})
+        return {
+            "symbol": symbol,
+            "bid": quote.get("bid", 0),
+            "ask": quote.get("ask", 0),
+            "bid_size": quote.get("bid_size", 0),
+            "ask_size": quote.get("ask_size", 0),
+            "timestamp": quote.get("timestamp"),
+            "last_trade": trade.get("price", 0),
+            "minute_close": minute_bar.get("close", 0),
+            "daily_close": daily_bar.get("close", 0),
+        }
+
+    def get_market_snapshots(self, symbols: List[str]) -> Dict[str, Dict]:
+        """Get consolidated Alpaca snapshots for multiple stock symbols."""
         if not self._connected:
             raise ConnectionError("Not connected to Alpaca")
         
         try:
-            from alpaca.data.live import StockDataStream
-            from alpaca.data.requests import StockLatestQuoteRequest
-            from alpaca.data.historical import StockHistoricalDataClient
-            
-            data_client = StockHistoricalDataClient(
-                api_key=self.api_key,
-                secret_key=self.api_secret
+            from alpaca.data.requests import StockSnapshotRequest
+
+            request = StockSnapshotRequest(
+                symbol_or_symbols=symbols,
+                feed=self.data_feed,
             )
-            
-            request = StockLatestQuoteRequest(symbol_or_symbols=symbol)
-            quote = data_client.get_stock_latest_quote(request)
-            
-            if symbol in quote:
-                q = quote[symbol]
-                return {
-                    "symbol": symbol,
-                    "bid": float(q.bid_price),
-                    "ask": float(q.ask_price),
-                    "bid_size": int(q.bid_size),
-                    "ask_size": int(q.ask_size),
-                    "timestamp": str(q.timestamp)
-                }
-            
-            return {}
-            
+            snapshots = self.data_client.get_stock_snapshot(request)
+            return {
+                symbol: self._snapshot_to_dict(snapshot)
+                for symbol, snapshot in snapshots.items()
+            }
         except Exception as e:
-            logger.error(f"Failed to get quote for {symbol}: {e}")
+            logger.error(f"Failed to get market snapshots for {symbols}: {e}")
             raise
+
+    @staticmethod
+    def _snapshot_to_dict(snapshot) -> Dict:
+        """Convert Alpaca snapshot models into plain dictionaries."""
+        quote = snapshot.latest_quote
+        trade = snapshot.latest_trade
+
+        def bar_to_dict(bar) -> Dict:
+            if bar is None:
+                return {}
+            return {
+                "timestamp": str(bar.timestamp),
+                "open": float(bar.open),
+                "high": float(bar.high),
+                "low": float(bar.low),
+                "close": float(bar.close),
+                "volume": float(bar.volume),
+                "trade_count": int(bar.trade_count or 0),
+                "vwap": float(bar.vwap) if bar.vwap is not None else None,
+            }
+
+        return {
+            "latest_quote": {
+                "timestamp": str(quote.timestamp) if quote else None,
+                "bid": float(quote.bid_price) if quote else 0,
+                "ask": float(quote.ask_price) if quote else 0,
+                "bid_size": int(quote.bid_size) if quote else 0,
+                "ask_size": int(quote.ask_size) if quote else 0,
+            },
+            "latest_trade": {
+                "timestamp": str(trade.timestamp) if trade else None,
+                "price": float(trade.price) if trade else 0,
+                "size": float(trade.size) if trade else 0,
+            },
+            "minute_bar": bar_to_dict(snapshot.minute_bar),
+            "daily_bar": bar_to_dict(snapshot.daily_bar),
+            "previous_daily_bar": bar_to_dict(snapshot.previous_daily_bar),
+        }
+
+    def get_market_clock(self) -> Dict:
+        """Get Alpaca's authoritative market clock."""
+        if not self._connected:
+            raise ConnectionError("Not connected to Alpaca")
+
+        clock = self.client.get_clock()
+        return {
+            "timestamp": str(clock.timestamp),
+            "is_open": bool(clock.is_open),
+            "next_open": str(clock.next_open),
+            "next_close": str(clock.next_close),
+        }
     
     def get_order_history(self, account_id: str, days: int = 30) -> List[Dict]:
         """Get order history."""

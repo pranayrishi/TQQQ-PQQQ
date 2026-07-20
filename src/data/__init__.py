@@ -1,12 +1,12 @@
 """Data infrastructure modules."""
 
-from .polygon_client import PolygonClient, PolygonAPIError
+from .yfinance_client import YahooFinanceClient, YahooFinanceError
 from .data_manager import DataManager, DataError
 from .cache_manager import CacheManager
 
 __all__ = [
-    "PolygonClient",
-    "PolygonAPIError", 
+    "YahooFinanceClient",
+    "YahooFinanceError",
     "DataManager",
     "DataError",
     "CacheManager"

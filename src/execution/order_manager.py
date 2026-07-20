@@ -106,6 +106,27 @@ class OrderManager:
         """Get available cash for an account."""
         broker = self.get_broker_for_account(account_id)
         return broker.get_cash_balance(account_id)
+
+    def get_quote(self, symbol: str) -> Dict:
+        """Get a current quote from the first connected broker."""
+        for broker in self.brokers.values():
+            if broker.is_connected:
+                return broker.get_quote(symbol)
+        raise ConnectionError("No connected broker is available for quotes")
+
+    def get_market_snapshots(self, symbols: List[str]) -> Dict[str, Dict]:
+        """Get current quotes, trades, and bars from a connected broker."""
+        for broker in self.brokers.values():
+            if broker.is_connected:
+                return broker.get_market_snapshots(symbols)
+        raise ConnectionError("No connected broker is available for market data")
+
+    def get_market_clock(self) -> Dict:
+        """Get the authoritative market clock from a connected broker."""
+        for broker in self.brokers.values():
+            if broker.is_connected:
+                return broker.get_market_clock()
+        raise ConnectionError("No connected broker is available for market clock")
     
     def place_order(
         self,
